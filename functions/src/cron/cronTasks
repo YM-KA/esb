@@ -1,0 +1,198 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2024 Kazuyuki Arai, Yoomi AB
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+const database = require("../firebase-db");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+
+const funcEsb = require("../http-functions/func-esb");
+const funcFetch = require("../http-functions/func-fetch");
+const funcOAuth = require("../http-functions/func-oauth");
+const funcData = require("../data-functions/func-data");
+
+const { logger } = require("firebase-functions");
+
+// Import enviroment variable config (.env)
+// require("dotenv").config();
+
+// const firebaseFunctionsConfig = functions.config();
+
+exports.cronGetProgrammeStarts = onSchedule(
+  {
+    schedule: "0 2 * * *",
+    timeZone: "Europe/Stockholm",
+  },
+  async (event) => {
+    const now = new Date().getTime();
+    logger.info("now", now);
+    const systemAuth = await funcOAuth.getAuthByName({ name: "eduAdmin" });
+    const endpoint = await funcEsb.getEndpointByName({
+      name: "eduAdmin",
+      version: "v1",
+    });
+
+    const url = `${endpoint.host}/v1/odata/ProgrammeStarts`;
+    const options = {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${systemAuth.token}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+    };
+    logger.debug("url:", url);
+    logger.debug("options:", JSON.stringify(options));
+    try {
+      const res = await funcFetch.fetch(url, options);
+      const text = await res.text();
+      const destinationData = funcData.getJsonDataFromText(text);
+      const status = res.status;
+      logger.debug("url:", url);
+      logger.debug("res:", JSON.stringify(res));
+      logger.debug("Request text response:", text);
+      logger.debug("status:", JSON.stringify(status));
+      if (status === 404) {
+        logger.error("Status: 404");
+        return Promise.resolve(false);
+      }
+      if (status !== 404 && status !== 200) {
+        logger.error(`Status: ${status}`);
+        return Promise.resolve(false);
+      }
+
+      let programmeStartUris = [];
+      destinationData.value.forEach((programstart) => {
+        programmeStartUris.push({ ...programstart });
+      });
+      return await database.ref("programmestarts/data").set(programmeStartUris);
+    } catch (err) {
+      logger.error("error:", err);
+      return Promise.resolve(false);
+    }
+  },
+);
+
+exports.cronCleanup = onSchedule(
+  {
+    schedule: "2 2 * * *",
+    timeZone: "Europe/Stockholm",
+  },
+  async (event) => {
+    const now = new Date().getTime();
+    logger.info("now", now);
+    const purgeTime = now - 1000 * 60 * 60 * 24 * 5; // 5 days
+    logger.info("purgeTime", purgeTime);
+
+    // Clean out old transactions-complete / transactions-404 / transactions-noaction
+    const myPromises = [];
+
+    const completeTransactionSnaps = await database
+      .ref("/transactions-complete")
+      .orderByChild("created")
+      .endAt(purgeTime)
+      .once("value");
+    logger.info(
+      `transactions-complete: found ${completeTransactionSnaps.numChildren()} transactions to purge`,
+    );
+    completeTransactionSnaps.forEach((snap) => {
+      myPromises.push(snap.ref.remove());
+    });
+    // Handle child transactions
+    const completeTransactions = await database
+      .ref("/transactions-complete")
+      .once("value");
+    logger.info(
+      `transactions-complete: found ${completeTransactions.numChildren()} transactions to investigate`,
+    );
+    completeTransactions.forEach((snap) => {
+      const transactionId = snap.key;
+      const transactionTime = transactionId.split("-")[0];
+      if (transactionTime <= purgeTime) {
+        myPromises.push(snap.ref.remove());
+        // logger.info(`transactions-complete remove child transaction ${transactionId}`);
+      }
+    });
+
+    const errorTransactionSnaps = await database
+      .ref("/transactions-404")
+      .orderByChild("created")
+      .endAt(purgeTime)
+      .once("value");
+    logger.info(
+      `transactions-404: found ${errorTransactionSnaps.numChildren()} transactions to purge`,
+    );
+    errorTransactionSnaps.forEach((snap) => {
+      // myPromises.push(snap.ref.remove());
+    });
+    // Handle child transactions
+    const errorTransactions = await database
+      .ref("/transactions-404")
+      .once("value");
+    logger.info(
+      `transactions-404: found ${errorTransactions.numChildren()} transactions to investigate`,
+    );
+    errorTransactions.forEach((snap) => {
+      const transactionId = snap.key;
+      const transactionTime = transactionId.split("-")[0];
+      if (transactionTime <= purgeTime) {
+        // myPromises.push(snap.ref.remove());
+        logger.info(
+          `transactions-404 remove child transaction ${transactionId}`,
+        );
+      }
+    });
+
+    const noActionTransactionSnaps = await database
+      .ref("/transactions-noaction")
+      .orderByChild("created")
+      .endAt(purgeTime)
+      .once("value");
+    logger.info(
+      `transactions-noaction: found ${noActionTransactionSnaps.numChildren()} transactions to purge`,
+    );
+    noActionTransactionSnaps.forEach((snap) => {
+      myPromises.push(snap.ref.remove());
+    });
+    // Handle child transactions
+    const noActionTransactions = await database
+      .ref("/transactions-noaction")
+      .once("value");
+    logger.info(
+      `transactions-noaction: found ${noActionTransactions.numChildren()} transactions to investigate`,
+    );
+    noActionTransactions.forEach((snap) => {
+      const transactionId = snap.key;
+      const transactionTime = transactionId.split("-")[0];
+      if (transactionTime <= purgeTime) {
+        myPromises.push(snap.ref.remove());
+      }
+    });
+
+    return Promise.all(myPromises)
+      .then((res) => Promise.resolve(true))
+      .catch((err) => {
+        logger.error("onTransactionUpdate Error", err);
+        return Promise.reject(err);
+      });
+  },
+);

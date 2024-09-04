@@ -22,8 +22,18 @@
  * SOFTWARE.
  */
 
-const admin = require("firebase-admin");
+const { onValueCreated } = require("firebase-functions/v2/database");
 
-const app = admin.initializeApp();
-const database = admin.database(app);
-module.exports = database;
+const funcEmailBuilder = require("../sendinblue/testBench");
+
+exports.testEmailSend = onValueCreated(
+  {
+    ref: "/DUMMY/123",
+    // instance: "default",
+    region: "europe-west1",
+  },
+  async (event) => {
+    await funcEmailBuilder.sendAlertEmail();
+    return Promise.resolve();
+  },
+);

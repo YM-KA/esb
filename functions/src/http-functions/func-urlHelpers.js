@@ -22,8 +22,28 @@
  * SOFTWARE.
  */
 
-const admin = require("firebase-admin");
+// Calculate domain
+const appDomains = {
+  PROD: "yoomi.se",
+  QA: "nothing.se",
+  DEV: "nothing.se",
+};
+const appENV = process.env.APP_ENV || "DEV";
+const appDomain = appDomains[appENV];
 
-const app = admin.initializeApp();
-const database = admin.database(app);
-module.exports = database;
+// export helpers
+module.exports = {
+  getCorsDomains: () => {
+    const allowedOrigins = {
+      PROD: [
+        `https://api2.${appDomain}`,
+        "https://yoomi.sharepoint.com",
+        "https://home.yoomi.se",
+      ],
+      QA: [`https://api2.${appDomain}`],
+      DEV: [`https://api2.${appDomain}`, "http://127.0.0.1:8080"],
+    };
+    const corsDomains = allowedOrigins[appENV];
+    return corsDomains;
+  },
+};

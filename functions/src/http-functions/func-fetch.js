@@ -22,8 +22,7 @@
  * SOFTWARE.
  */
 
-const admin = require("firebase-admin");
-
-const app = admin.initializeApp();
-const database = admin.database(app);
-module.exports = database;
+module.exports = {
+  fetch: (...args) =>
+    import("node-fetch").then(({ default: fetch }) => fetch(...args)),
+};

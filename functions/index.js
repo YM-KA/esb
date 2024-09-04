@@ -22,8 +22,10 @@
  * SOFTWARE.
  */
 
-const admin = require("firebase-admin");
+exports.cronGetProgrammeStarts =
+  require("./src/cron/cronTasks").cronGetProgrammeStarts;
+exports.testEmailSend = require("./src/manual-tasks/testBench").testEmailSend;
+exports.triggerCacheRebuild =
+  require("./src/cache-tasks/cache").triggerCacheRebuild;
 
-const app = admin.initializeApp();
-const database = admin.database(app);
-module.exports = database;
+exports.api = require("./src/http-functions/api").api;
